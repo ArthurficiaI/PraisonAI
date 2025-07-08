@@ -1,4 +1,3 @@
-import dotenv
 from dotenv import load_dotenv
 load_dotenv()
 import asyncio
@@ -7,14 +6,9 @@ import re
 import requests
 import subprocess
 import fnmatch
-
-
 import os
-import openai
-
 from praisonaiagents import Agent, Task, PraisonAIAgents
-
-from praisonaiagents.tools import read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file, calculator_tools
+from praisonaiagents.tools import read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file
 from praisonaiagents.tools import (
     evaluate, solve_equation, convert_units,
     calculate_statistics, calculate_financial
@@ -92,6 +86,7 @@ async def handle_task(index):
                 subprocess.run(["git", "checkout", commit_hash], cwd=repo_dir, check=True, env=env)
 
 
+        
 
 
         planning_Agent = Agent(
@@ -144,9 +139,6 @@ async def handle_task(index):
         )
 
 
-        print(f"Launching agents (PraisonAI)...")
-
-
         task = Task(
             name="Fixing_issue_in_repo_task",
             description=f"Do this task with your team of two other agents with the following roles:\n"
@@ -176,24 +168,8 @@ async def handle_task(index):
             f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.",
             expected_output="Correct files",
             agent=coding_Agent,
-            #next_tasks=["further_planning_task"],
 
         )
-        #
-        # furtherPlanningTask = Task(
-        #     name="further_planning_task",
-        #     description="""
-        #     Depending on what your team reported, either:
-        #      make a plan for coder to edit a certain file
-        #      or tell testing agent to test
-        #      or end the run if you think you're done
-        #     """,
-        #     agent=planning_Agent,
-        #     next_tasks=["coding_task", "testing_task"],
-        #     condition={
-        #         "coding_needed": ["coding_task"],
-        #     }
-        # )
 
         agents = PraisonAIAgents(
             agents=[planning_Agent,coding_Agent],
@@ -205,17 +181,8 @@ async def handle_task(index):
         )
 
         agents.start()
+        
 
-
-
-
-
-
-
-
-
-        # Token usage
-        token_total = extract_last_token_total_from_logs()
 
         # Call REST service instead for evaluation changes from agent
         print(f"Calling SWE-Bench REST service with repo: {repo_dir}")
@@ -246,7 +213,6 @@ async def handle_task(index):
             log.write(f"\n--- TESTCASE {index} ---\n")
             log.write(f"FAIL_TO_PASS passed: {fail_pass_passed}/{fail_pass_total}\n")
             log.write(f"PASS_TO_PASS passed: {pass_pass_passed}/{pass_pass_total}\n")
-            log.write(f"Total Tokens Used: {token_total}\n")
         print(f"Test case {index} completed and logged.")
 
     except Exception as e:
