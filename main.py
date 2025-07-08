@@ -6,17 +6,14 @@ import json
 import re
 import requests
 import subprocess
+import fnmatch
+
 
 import os
 import openai
 
-from config import *
-import litellm
-print(litellm._turn_on_debug())
-#http://188.245.32.59:4000
-#http://localhost:11434/
 from praisonaiagents import Agent, Task, PraisonAIAgents
-#from app.config import config
+
 from praisonaiagents.tools import read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file, calculator_tools
 from praisonaiagents.tools import (
     evaluate, solve_equation, convert_units,
@@ -26,10 +23,32 @@ from praisonaiagents.tools import (
     execute_code, analyze_code, format_code,
     lint_code, disassemble_code
 )
+from pydantic import BaseModel
+from typing import Optional
+
+class DataForCoder(BaseModel):
+    task_for_file: str
+    path: Optional[str] = "normal"
 
 
 API_URL = "http://localhost:8081/task/index/"  # API endpoint for SWE-Bench-Lite
 LOG_FILE = "results.log"
+
+
+def find_files_recursively(path_from_root: str, pattern: str) -> str:
+    root_dir = os.getcwd()
+    directory = os.path.join(root_dir,path_from_root)
+
+    return_files = ""
+    for root, dirs, files in os.walk(directory):
+        for basename in files:
+            if fnmatch.fnmatch(basename, pattern):
+                filename = os.path.join(root, basename)
+                return_files += filename + "\n"
+
+    if(return_files.count("\n") > 70):
+        return "There were over 70 files found with that pattern, please use a more precise pattern"
+    return return_files
 
 async def handle_task(index):
     print(os.getenv("OPEN_API_KEY"))
@@ -75,35 +94,32 @@ async def handle_task(index):
 
 
 
-
         planning_Agent = Agent(
             name="Planner",
             backstory="You are a senior software architect, leading a team of professionals.",
             goal= "Research the code in a given repository together with a given issue.\n"
                   "Break the problem down into coding tasks for your team members.\n"
                   "Make sure the fix is minimal and only touches what's necessary to resolve the failing tests\n"
-                  "You have a highly capable Tester and Coder at your disposal.\n"
+                  "You have a highly capable Coder at your disposal.\n"
                   "Always tell them the corresponding file paths to their tasks.",
             verbose=True,
 
-            tools=[read_file, list_files, get_file_info, execute_code, analyze_code, format_code, lint_code, disassemble_code],
+            tools=[read_file, list_files, find_files_recursively],
             allow_delegation=True,
             self_reflect=True,
-            min_reflect=2,
-            max_reflect=4,
-            instructions=f"Do this task with your team of two other agents with the following roles:\n"
+            min_reflect=1,
+            max_reflect=3,
+            instructions=f"Do this task with your teammate with the following roles:\n"
             f"Always research into the given repository and find out what the problem is, before concluding.\n"
             f"- Coder: makes actual changes to the code files in the Git repository\n"
-            f"- Tester: runs the test suite and checks whether the bug is resolved\n\n"
-            f"Work in the directory: repo_{index}. This is a Git repository.\n"
+            f"Work in the directory: repos/repo_{index}. This is a Git repository.\n"
             f"Your goal is to fix the problem described below.\n"
             f"All code changes must be saved to the files, so they appear in `git diff`.\n"
-            f"The fix will be verified by running the affected tests.\n"
             f"Problem description:\n\n"
             f"{prompt}\n\n"
             f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.\n"
             f"Your job is only done after the issue has been fixed, or you tried for long enough\n"
-            f"Give the coder and tester agents instructions, after you have developed a plan. ALWAYS give them all relevant paths for their tasks."
+            f"Give the coder agent instructions, after you have developed a plan. ALWAYS give them all relevant paths for their tasks."
         )
 
         coding_Agent = Agent(
@@ -114,87 +130,82 @@ async def handle_task(index):
                  "Make sure the fix is minimal and only touches what's necessary to resolve the failing tests",
             verbose=True,
             self_reflect=True,
-            tools=[read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file,execute_code, analyze_code, format_code,lint_code, disassemble_code],
+            min_reflect=1,
+            max_reflect=3,
+            code_execution_mode = "unsafe", #A little risk to spice things up
+            tools=[read_file, write_file],
             allow_code_execution=True,
             instructions=f"Follow the given coding instructions by Planner\n"
-                        f"fWork in the directory: repo_{index}. This is a Git repository.\n"
+                        f"fWork in the directory: repos/repo_{index}. This is a Git repository.\n"
                         f"Your goal is to fix the problem described below.\n"
                         f"All code changes must be saved to the files, so they appear in `git diff`.\n"
                         f"The fix will be verified by running the affected tests.\n"
                         f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests. Tell the planner when you think you're done coding.",
         )
 
-        testing_Agent = Agent(
-            name="Tester",
-            backstory="You are a senior software developer, having specialized in testing.\n",
-            goal="Run the testsuite in the repository.\n"
-                 "Communicate to Planner exactly which tests failed.",
-            verbose=True,
-            tools=[read_file,list_files, get_file_info, execute_code, analyze_code, format_code, lint_code, disassemble_code],
-            allow_code_execution=True,
-            instructions=f"Follow the given coding instructions by Planner\n"
-                        f"fWork in the directory: repo_{index}. This is a Git repository.\n"
-                        f"Your goal is to run the tests in the repo and to either confirm or deny the correctness of the fixes by coder.\n"
-                        f"You report to Planner, who will then resume the work or break the task off, if the tests run good enough.\n"
-                        f"The fix will be verified by running the affected tests.\n",
-            self_reflect=True
-
-        )
-
-
 
         print(f"Launching agents (PraisonAI)...")
 
 
-        # task = Task(
-        #     name="Fixing_issue_in_repo_task",
-        #     description=f"Do this task with your team of two other agents with the following roles:\n"
-        #     f"Always research into the given repository and find out what the problem is, before concluding.\n"
-        #     f"- Coder: makes actual changes to the code files in the Git repository\n"
-        #     f"- Tester: runs the test suite and checks whether the bug is resolved\n\n"
-        #     f"Work in the directory: repo_{index}. This is a Git repository.\n"
-        #     f"Your goal is to fix the problem described below.\n"
-        #     f"All code changes must be saved to the files, so they appear in `git diff`.\n"
-        #     f"The fix will be verified by running the affected tests.\n"
-        #     f"Problem description:\n\n"
-        #     f"{prompt}\n\n"
-        #     f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.\n"
-        #     f"Your job is only done after the issue has been fixed, or you tried for long enough",
-        #     agent=planning_Agent
-        # )
+        task = Task(
+            name="Fixing_issue_in_repo_task",
+            description=f"Do this task with your team of two other agents with the following roles:\n"
+            f"Always research into the given repository and find out what the problem is, before concluding.\n"
+            f"- Coder: makes actual changes to the code files in the Git repository\n"
+            f"- Tester: runs the test suite and checks whether the bug is resolved\n\n"
+            f"Work in the directory: repos/repo_{index}. This is a Git repository.\n"
+            f"Your goal is to fix the problem described below.\n"
+            f"All code changes must be saved to the files, so they appear in `git diff`.\n"
+            f"The fix will be verified by running the affected tests.\n"
+            f"Problem description:\n\n"
+            f"{prompt}\n\n"
+            f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.\n"
+            f"Your job done after you made a plan for coder or tester",
+            agent=planning_Agent,
+            next_tasks=["coding_task","testing_task"],
+
+        )
+
+        coding_task = Task(
+            name="coding_task",
+            description=f"Follow the given coding instructions by Planner\n"
+                        f"fWork in the directory: repos/repo_{index}. This is a Git repository.\n"
+            f"Your goal is to fix the problem described below.\n"
+            f"All code changes must be saved to the files, so they appear in `git diff`.\n"
+            f"The fix will be verified by running the affected tests.\n"
+            f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.",
+            expected_output="Correct files",
+            agent=coding_Agent,
+            #next_tasks=["further_planning_task"],
+
+        )
         #
-        # coding_task = Task(
-        #     name="coding_task",
-        #     description=f"Follow the given coding instructions by Planner\n"
-        #                 f"fWork in the directory: repo_{index}. This is a Git repository.\n"
-        #     f"Your goal is to fix the problem described below.\n"
-        #     f"All code changes must be saved to the files, so they appear in `git diff`.\n"
-        #     f"The fix will be verified by running the affected tests.\n"
-        #     f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.",
-        #     expected_output="Correct files",
-        #     agent=coding_Agent,
-        #
-        # )
-        #
-        # testing_task = Task(
-        #     name="testing_task",
-        #     description=f"Follow the given coding instructions by Planner\n"
-        #                 f"fWork in the directory: repo_{index}. This is a Git repository.\n"
-        #     f"Your goal is to run the tests in the repo and to either confirm or deny the correctness of the fixes by coder.\n"
-        #     f"You report to Planner, who will then resume the work or break the task off, if the tests run good enough.\n"
-        #     f"The fix will be verified by running the affected tests.\n"
-        #     f"Give Planner a complete report on which tests now work better",
+        # furtherPlanningTask = Task(
+        #     name="further_planning_task",
+        #     description="""
+        #     Depending on what your team reported, either:
+        #      make a plan for coder to edit a certain file
+        #      or tell testing agent to test
+        #      or end the run if you think you're done
+        #     """,
+        #     agent=planning_Agent,
+        #     next_tasks=["coding_task", "testing_task"],
+        #     condition={
+        #         "coding_needed": ["coding_task"],
+        #     }
         # )
 
         agents = PraisonAIAgents(
-            agents=[testing_Agent,coding_Agent,planning_Agent],
-            process="hierarchical",
+            agents=[planning_Agent,coding_Agent],
+            tasks=[task,coding_task],
+            process="workflow",
             manager_llm="gpt-4o-mini",
-            memory=True,
-            memory_config=config
+            max_iter=30,
+
         )
 
         agents.start()
+
 
 
 
@@ -267,7 +278,7 @@ def extract_last_token_total_from_logs():
 
 
 async def main():
-    for i in range(2, 3):
+    for i in range(13, 14):
         await handle_task(i)
 
 
