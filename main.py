@@ -8,7 +8,7 @@ import subprocess
 import fnmatch
 import os
 from praisonaiagents import Agent, Task, PraisonAIAgents
-from praisonaiagents.tools import read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file
+from praisonaiagents.tools import read_file, write_file, list_files, get_file_info, copy_file, move_file, delete_file, calculator_tools
 from praisonaiagents.tools import (
     evaluate, solve_equation, convert_units,
     calculate_statistics, calculate_financial
@@ -44,6 +44,25 @@ def find_files_recursively(path_from_root: str, pattern: str) -> str:
         return "There were over 70 files found with that pattern, please use a more precise pattern"
     return return_files
 
+def replace_in_file(path_from_root : str, old_string : str, new_string : str) -> str:
+    root_dir = os.getcwd()
+    filename = os.path.join(root_dir, path_from_root)
+
+    try:
+        with open(filename) as f:
+            s = f.read()
+            if old_string not in s:
+                return f"{old_string} not found in {filename}"
+
+
+        with open(filename, 'w') as f:
+            s = s.replace(old_string, new_string)
+            f.write(s)
+            return "String successfully replaced"
+
+    except Exception:
+        return "There was an error trying to replace content in the file, probably the file was not found."
+
 async def handle_task(index):
     print(os.getenv("OPEN_API_KEY"))
 
@@ -51,7 +70,7 @@ async def handle_task(index):
     api_url = f"{API_URL}{index}"
     print(f"Fetching test case {index} from {api_url}...")
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_dir = os.path.join(root_dir, f"repo_{index}")  # Use unique repo directory per task
+    repo_dir = os.path.join(root_dir+ r"\repos", f"repo_{index}")  # Use unique repo directory per task
     start_dir = os.getcwd()  # Remember original working directory
 
     try:
@@ -86,7 +105,6 @@ async def handle_task(index):
                 subprocess.run(["git", "checkout", commit_hash], cwd=repo_dir, check=True, env=env)
 
 
-        
 
 
         planning_Agent = Agent(
@@ -113,7 +131,6 @@ async def handle_task(index):
             f"Problem description:\n\n"
             f"{prompt}\n\n"
             f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.\n"
-            f"Your job is only done after the issue has been fixed, or you tried for long enough\n"
             f"Give the coder agent instructions, after you have developed a plan. ALWAYS give them all relevant paths for their tasks."
         )
 
@@ -128,15 +145,20 @@ async def handle_task(index):
             min_reflect=1,
             max_reflect=3,
             code_execution_mode = "unsafe", #A little risk to spice things up
-            tools=[read_file, write_file],
+            tools=[read_file, replace_in_file,find_files_recursively],
             allow_code_execution=True,
             instructions=f"Follow the given coding instructions by Planner\n"
                         f"fWork in the directory: repos/repo_{index}. This is a Git repository.\n"
                         f"Your goal is to fix the problem described below.\n"
                         f"All code changes must be saved to the files, so they appear in `git diff`.\n"
                         f"The fix will be verified by running the affected tests.\n"
-                        f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests. Tell the planner when you think you're done coding.",
+                        f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests. Tell the planner when you think you're done coding."
+                        f"To write code, use the replace_in_file tool, make sure to make the string you want to be replaced specific enough so only the right string gets replaced."
+                        f"Also see that when you give the old string more context, that the new string needs the same context added too. Also some code might be in python so take care of the correct indentation!",
         )
+
+
+        print(f"Launching agents (PraisonAI)...")
 
 
         task = Task(
@@ -152,7 +174,7 @@ async def handle_task(index):
             f"Problem description:\n\n"
             f"{prompt}\n\n"
             f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.\n"
-            f"Your job done after you made a plan for coder or tester",
+            f"Your job done after you made a plan for coder or tester, you can also end your task if you know no way forward",
             agent=planning_Agent,
             next_tasks=["coding_task","testing_task"],
 
@@ -165,26 +187,28 @@ async def handle_task(index):
             f"Your goal is to fix the problem described below.\n"
             f"All code changes must be saved to the files, so they appear in `git diff`.\n"
             f"The fix will be verified by running the affected tests.\n"
-            f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests.",
-            expected_output="Correct files",
+            f"Make sure the fix is minimal and only touches what's necessary to resolve the failing tests."
+            f"If you have made your changes you can end your task, you can also end the task if you know no way forward",
             agent=coding_Agent,
+            #next_tasks=["further_planning_task"],
 
         )
+
 
         agents = PraisonAIAgents(
             agents=[planning_Agent,coding_Agent],
             tasks=[task,coding_task],
             process="workflow",
             manager_llm="gpt-4o-mini",
-            max_iter=30,
+            max_iter=2,
 
         )
 
         agents.start()
-        
 
 
-        # Call REST service instead for evaluation changes from agent
+
+
         print(f"Calling SWE-Bench REST service with repo: {repo_dir}")
         test_payload = {
             "instance_id": instance_id,
@@ -244,7 +268,7 @@ def extract_last_token_total_from_logs():
 
 
 async def main():
-    for i in range(13, 14):
+    for i in range(1,2):
         await handle_task(i)
 
 
