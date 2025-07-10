@@ -1,3 +1,8 @@
+Execute the following commands:
+
+pip install praisonai
+pip install dotenv
+
 Create a .env file and specify the following variables in it:
 
 OPENAI_API_KEY = "your-api-key"
